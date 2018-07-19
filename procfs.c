@@ -20,34 +20,31 @@
  *
  *******************************************************************/
 
-#include <linux/compiler.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/spinlock.h>
-#include <linux/semaphore.h>
 #include <linux/fs.h>
-#include <linux/namei.h>
 #include <linux/stat.h>
 #include <linux/file.h>
-#include <linux/fdtable.h>
 #include <linux/printk.h>
-#include <linux/spinlock.h>
-#include <linux/rculist.h>
-#include <linux/flex_array.h>
 #include <linux/slab.h>
-#include <linux/delay.h>
 #include <linux/moduleparam.h>
-#include <uapi/linux/stat.h>
-#include <asm/atomic64_64.h>
-#define assert(s) do { \
+
+#define assert(s) do {													\
 		if (unlikely(!(s))) printk(KERN_DEBUG "assertion failed: " #s " at %s:%d\n", \
-						  __FILE__, __LINE__);							\
-  } while(0)
+								   __FILE__, __LINE__);					\
+	} while(0)
 
 #define _MODULE_LICENSE "GPL v2"
 #define _MODULE_AUTHOR "Michael D. Day II <ncultra@gmail.com>"
 #define _MODULE_INFO "in-kernel file reader"
 
+char *name = "/proc/cpuinfo";
+module_param(name, charp, 0644);
+MODULE_PARM_DESC(name, "path of file to read");
+
+int text_file = 1;
+module_param(text_file, int, 0644);
+MODULE_PARM_DESC(text_file, "file to be read is utf-8");
 
 
 /**
@@ -197,20 +194,26 @@ err_exit:
 }
 
 
-int module_main(void)
+ssize_t module_main(void)
 {
-	do {
-		;
-	} while (0);
-	return 0;
+	void *buffer = NULL;
+	ssize_t bytes = vfs_read_data(name, &buffer);
+	printk(KERN_DEBUG "PROCFS bytes read: %ld\n", bytes);
+
+	if (bytes > 0) {
+		if (text_file) {
+			printk(KERN_INFO "%s", (char *)buffer);
+		}
+		kfree(buffer);
+	}
+	return bytes;
 }
 
 static int
 __init procfs_init(void)
 {
-	int ccode = 0;
-
-	return ccode;
+	module_main();
+	return 0;
 }
 
 static void
