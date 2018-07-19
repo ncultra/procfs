@@ -1,3 +1,12 @@
+# emacs backups
+*~
+
+# disassembled object files
+*.o.asm
+
+# kernel build cache
+.cache.mk
+
 # Prerequisites
 *.d
 
