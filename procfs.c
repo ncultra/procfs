@@ -48,6 +48,81 @@
 #define _MODULE_AUTHOR "Michael D. Day II <ncultra@gmail.com>"
 #define _MODULE_INFO "in-kernel file reader"
 
+/**
+ * Note on /sys and /proc files:
+ * on Linux 4.x they stat as having no blocks and zero size,
+ * but they do have a blocksize of 0x400. So, by default, we
+ * will allocate a buffer the size of one block
+ **/
+
+int file_getattr(struct file *f, struct kstat *k)
+{
+	int ccode = 0;
+	memset(k, 0x00, sizeof(struct kstat));
+	ccode = vfs_getattr(&f->f_path, k, 0x00000fffU, KSTAT_QUERY_FLAGS);
+	return ccode;
+}
+
+ssize_t
+write_file_struct(struct file * f, void *buf, size_t count, loff_t * pos)
+{
+	ssize_t ccode;
+	ccode = kernel_write(f, buf, count, pos);
+	if (ccode < 0) {
+		pr_err("Unable to write file: %p (%ld)", f, ccode);
+	}
+	return ccode;
+}
+
+ssize_t read_file_struct(struct file * f, void *buf, size_t count, loff_t * pos)
+{
+	ssize_t ccode;
+
+	ccode = kernel_read(f, buf, count, pos);
+	if (ccode < 0) {
+		pr_err("Unable to read file: %p (%ld)", f, ccode);
+	}
+
+	return ccode;
+}
+
+ssize_t write_file(char *name, void *buf, size_t count, loff_t * pos)
+{
+	ssize_t ccode;
+	struct file *f;
+	f = filp_open(name, O_WRONLY, 0);
+	if (f) {
+		ccode = kernel_write(f, buf, count, pos);
+		if (ccode < 0) {
+			pr_err("Unable to write file: %s (%ld)", name, ccode);
+		}
+		filp_close(f, 0);
+	} else {
+		ccode = -EBADF;
+		pr_err("Unable to open file: %s (%ld)", name, ccode);
+	}
+	return ccode;
+}
+
+ssize_t read_file(char *name, void *buf, size_t count, loff_t * pos)
+{
+	ssize_t ccode;
+	struct file *f;
+
+	f = filp_open(name, O_RDONLY, 0);
+	if (f) {
+		ccode = kernel_read(f, buf, count, pos);
+		if (ccode < 0) {
+			pr_err("Unable to read file: %s (%ld)", name, ccode);
+		}
+		filp_close(f, 0);
+	} else {
+		ccode = -EBADF;
+		pr_err("Unable to open file: %s (%ld)", name, ccode);
+	}
+	return ccode;
+}
+
 int module_main(void)
 {
 	do {
