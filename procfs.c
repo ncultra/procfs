@@ -48,12 +48,29 @@
 #define _MODULE_AUTHOR "Michael D. Day II <ncultra@gmail.com>"
 #define _MODULE_INFO "in-kernel file reader"
 
+
+
 /**
  * Note on /sys and /proc files:
  * on Linux 4.x they stat as having no blocks and zero size,
  * but they do have a blocksize of 0x400. So, by default, we
- * will allocate a buffer the size of one block
+ * will allocate a buffer the size of one block.
+ *
+ * This is certainly a gross hack and may change with future
+ * kernel versions.
  **/
+
+static inline size_t
+calc_file_size(struct kstat *kstat)
+{
+	if (kstat->size) {
+		return kstat->size;
+	}
+	if (kstat->blocks) {
+		return kstat->blocks * kstat->blksize;
+	}
+	return kstat->blksize > 0 ? kstat->blksize: 0x100;
+}
 
 int file_getattr(struct file *f, struct kstat *k)
 {
@@ -122,6 +139,63 @@ ssize_t read_file(char *name, void *buf, size_t count, loff_t * pos)
 	}
 	return ccode;
 }
+
+ssize_t
+vfs_read_data(char *path, void **data)
+{
+	struct file *f = NULL;
+	ssize_t ccode = 0;
+
+	if (!data || !path) {
+		return -EINVAL;
+	}
+	*data = NULL;
+
+	/* open the file, get the file (or block) size */
+
+	f = filp_open(path, O_RDONLY, 0);
+	if (f) {
+		struct kstat stat = {0};
+		size_t max_size = 0x100000;
+		loff_t pos = 0;
+		ccode = file_getattr(f, &stat);
+		if (ccode) {
+			printk(KERN_INFO "error getting file attributes %zx\n", ccode);
+			goto err_exit;
+		}
+		/**
+		 * get the size, or default size if /proc or /sys
+		 * set an arbitrary limit of 1 MB for read buffer
+		 **/
+		ccode = min(calc_file_size(&stat), max_size);
+		*data = kzalloc(ccode, GFP_KERNEL);
+		if (*data == NULL) {
+			ccode = -ENOMEM;
+			goto err_exit;
+		}
+
+		ccode = read_file_struct(f, *data, ccode, &pos);
+		if (ccode < 0) {
+			goto err_exit;
+		}
+	} else {
+		ccode = -EBADF;
+		pr_err("sysfs-probe Unable to get a file handle: %s (%zx)\n", path, ccode);
+		goto err_exit;
+	}
+	return ccode;
+
+err_exit:
+	if (f) {
+		filp_close(f, 0);
+	}
+	if (*data != NULL) {
+		kfree(*data);
+		*data = NULL;
+	}
+	return ccode;
+}
+
 
 int module_main(void)
 {
