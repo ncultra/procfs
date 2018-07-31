@@ -46,6 +46,14 @@ int text_file = 1;
 module_param(text_file, int, 0644);
 MODULE_PARM_DESC(text_file, "file to be read is utf-8");
 
+long chunk_size = 0x400;
+module_param(chunk_size, long, 0644);
+MODULE_PARM_DESC(chunk_size, "chunk size for virtual files");
+
+long max_size = (~0UL >> 1);
+module_param(max_size, long, 0644);
+MODULE_PARM_DESC(max_size, "largest file buffer to allocate");
+
 
 int file_getattr(struct file *f, struct kstat *k)
 {
@@ -98,7 +106,7 @@ ssize_t vfs_read_file(char *name, void **buf, size_t max_count, loff_t *pos)
 
 	f = filp_open(name, O_RDONLY, 0);
 	if (f) {
-		ssize_t chunk = 0x400, allocated = 0, cursor = 0;
+		ssize_t chunk = chunk_size, allocated = 0, cursor = 0;
 		*buf = kzalloc(chunk, GFP_KERNEL);
 		if (*buf) {
 			allocated = chunk;
@@ -154,7 +162,7 @@ ssize_t module_main(void)
 	ccode = kernel_read_file_from_path(name,
 									   &buffer,
 									   &size,
-									   INT_MAX,
+									   max_size,
 									   READING_MODULE);
 	if (ccode >= 0 && buffer != NULL && size >= 0) {
 		if (text_file) {
@@ -162,12 +170,11 @@ ssize_t module_main(void)
 		}
 		vfree(buffer);
 	} else {
-		size_t max_count = 0x4000;
 		size = 0LL;
 		buffer = NULL;
 		ccode = vfs_read_file(name,
 							  &buffer,
-							  max_count,
+							  max_size,
 							  &size);
 		if (text_file && buffer && size && ccode >= 0) {
 			dump_buffer((uint8_t *)buffer, size);
