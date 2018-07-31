@@ -47,28 +47,6 @@ module_param(text_file, int, 0644);
 MODULE_PARM_DESC(text_file, "file to be read is utf-8");
 
 
-/**
- * Note on /sys and /proc files:
- * on Linux 4.x they stat as having no blocks and zero size,
- * but they do have a blocksize of 0x400. So, by default, we
- * will allocate a buffer the size of one block.
- *
- * This is certainly a gross hack and may change with future
- * kernel versions.
- **/
-
-static inline size_t
-calc_file_size(struct kstat *kstat)
-{
-	if (kstat->size) {
-		return kstat->size;
-	}
-	if (kstat->blocks) {
-		return kstat->blocks * kstat->blksize;
-	}
-	return kstat->blksize > 0 ? kstat->blksize: 0x100;
-}
-
 int file_getattr(struct file *f, struct kstat *k)
 {
 	int ccode = 0;
@@ -77,36 +55,13 @@ int file_getattr(struct file *f, struct kstat *k)
 	return ccode;
 }
 
-ssize_t
-write_file_struct(struct file * f, void *buf, size_t count, loff_t * pos)
-{
-	ssize_t ccode;
-	ccode = kernel_write(f, buf, count, pos);
-	if (ccode < 0) {
-		pr_err("Unable to write file: %p (%ld)", f, ccode);
-	}
-	return ccode;
-}
-
-ssize_t read_file_struct(struct file * f, void *buf, size_t count, loff_t * pos)
-{
-	ssize_t ccode;
-
-	ccode = kernel_read(f, buf, count, pos);
-	if (ccode < 0) {
-		pr_err("Unable to read file: %p (%ld)", f, ccode);
-	}
-
-	return ccode;
-}
-
 ssize_t write_file(char *name, void *buf, size_t count, loff_t * pos)
 {
 	ssize_t ccode;
 	struct file *f;
-	f = filp_open(name, O_WRONLY, 0);
+	f = filp_open(name, O_RDWR, 0);
 	if (f) {
-		ccode = kernel_write(f, buf, count, pos);
+		ccode = __kernel_write(f, buf, count, pos);
 		if (ccode < 0) {
 			pr_err("Unable to write file: %s (%ld)", name, ccode);
 		}
@@ -118,77 +73,73 @@ ssize_t write_file(char *name, void *buf, size_t count, loff_t * pos)
 	return ccode;
 }
 
-ssize_t read_file(char *name, void *buf, size_t count, loff_t * pos)
+
+void dump_buffer(uint8_t *buffer, ssize_t size)
 {
-	ssize_t ccode;
-	struct file *f;
+	ssize_t characters = size;
+	uint8_t *cursor = buffer;
+	while (characters) {
+		printk(KERN_CONT "%c", *cursor);
+		cursor++;
+		characters--;
+	}
+}
+
+
+ssize_t vfs_read_file(char *name, void **buf, size_t max_count, loff_t *pos)
+{
+	ssize_t ccode = 0;
+	struct file *f = NULL;
+
+	assert(buf);
+	*buf = NULL;
+	assert(pos);
+	*pos = 0LL;
 
 	f = filp_open(name, O_RDONLY, 0);
 	if (f) {
-		ccode = kernel_read(f, buf, count, pos);
-		if (ccode < 0) {
-			pr_err("Unable to read file: %s (%ld)", name, ccode);
+		ssize_t chunk = 0x400, allocated = 0, cursor = 0;
+		*buf = kzalloc(chunk, GFP_KERNEL);
+		if (*buf) {
+			allocated = chunk;
+		} else {
+			ccode =  -ENOMEM;
+			goto out_err;
 		}
+
+		do {
+			/**
+			 * read one chunk at a time
+			 **/
+			cursor = *pos; /* initially zero, then positioned with further reads */
+			ccode = kernel_read(f, *buf + cursor, chunk, pos);
+			if (ccode < 0) {
+				pr_err("Unable to read file chunk: %s (%ld)", name, ccode);
+				goto out_err;
+			}
+			if (ccode > 0) {
+				*buf = krealloc(*buf, allocated + chunk, GFP_KERNEL);
+				if (! *buf) {
+					ccode = -ENOMEM;
+					goto out_err;
+				}
+				allocated += chunk;
+			}
+		} while (ccode && allocated <= max_count);
 		filp_close(f, 0);
 	} else {
 		ccode = -EBADF;
 		pr_err("Unable to open file: %s (%ld)", name, ccode);
 	}
 	return ccode;
-}
 
-ssize_t
-vfs_read_data(char *path, void **data)
-{
-	struct file *f = NULL;
-	ssize_t ccode = 0;
-
-	if (!data || !path) {
-		return -EINVAL;
-	}
-	*data = NULL;
-
-	/* open the file, get the file (or block) size */
-
-	f = filp_open(path, O_RDONLY, 0);
-	if (f) {
-		struct kstat stat = {0};
-		size_t max_size = 0x100000;
-		loff_t pos = 0;
-		ccode = file_getattr(f, &stat);
-		if (ccode) {
-			printk(KERN_INFO "error getting file attributes %zx\n", ccode);
-			goto err_exit;
-		}
-		/**
-		 * get the size, or default size if /proc or /sys
-		 * set an arbitrary limit of 1 MB for read buffer
-		 **/
-		ccode = min(calc_file_size(&stat), max_size);
-		*data = kzalloc(ccode, GFP_KERNEL);
-		if (*data == NULL) {
-			ccode = -ENOMEM;
-			goto err_exit;
-		}
-
-		ccode = read_file_struct(f, *data, ccode, &pos);
-		if (ccode < 0) {
-			goto err_exit;
-		}
-	} else {
-		ccode = -EBADF;
-		pr_err("sysfs-probe Unable to get a file handle: %s (%zx)\n", path, ccode);
-		goto err_exit;
-	}
-	return ccode;
-
-err_exit:
+out_err:
 	if (f) {
 		filp_close(f, 0);
 	}
-	if (*data != NULL) {
-		kfree(*data);
-		*data = NULL;
+	if  (*buf) {
+		kfree(*buf);
+		*buf = NULL;
 	}
 	return ccode;
 }
@@ -197,16 +148,36 @@ err_exit:
 ssize_t module_main(void)
 {
 	void *buffer = NULL;
-	ssize_t bytes = vfs_read_data(name, &buffer);
-	printk(KERN_DEBUG "PROCFS bytes read: %ld\n", bytes);
+	int ccode = 0;
+	loff_t size = 0x1000;
 
-	if (bytes > 0) {
+	ccode = kernel_read_file_from_path(name,
+									   &buffer,
+									   &size,
+									   INT_MAX,
+									   READING_MODULE);
+	if (ccode >= 0 && buffer != NULL && size >= 0) {
 		if (text_file) {
-			printk(KERN_INFO "%s", (char *)buffer);
+			dump_buffer((uint8_t *)buffer, (ssize_t) size);
 		}
-		kfree(buffer);
+		vfree(buffer);
+	} else {
+		size_t max_count = 0x4000;
+		size = 0LL;
+		buffer = NULL;
+		ccode = vfs_read_file(name,
+							  &buffer,
+							  max_count,
+							  &size);
+		if (text_file && buffer && size && ccode >= 0) {
+			dump_buffer((uint8_t *)buffer, size);
+		}
+		if (buffer) {
+			kfree(buffer);
+		}
 	}
-	return bytes;
+
+	return ccode;
 }
 
 static int
