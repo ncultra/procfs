@@ -176,10 +176,10 @@ ssize_t module_main(void)
 							  &buffer,
 							  max_size,
 							  &size);
-		if (text_file && buffer && size && ccode >= 0) {
-			dump_buffer((uint8_t *)buffer, size);
-		}
-		if (buffer) {
+		if (ccode >= 0 && buffer != NULL && size >= 0) {
+			if (text_file) {
+				dump_buffer((uint8_t *)buffer, (ssize_t)size);
+			}
 			kfree(buffer);
 		}
 	}
